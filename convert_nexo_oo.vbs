@@ -4,6 +4,7 @@
 '   Based on convert_nexo v1.3 by droblesa 03/18/21, https://community.accointing.com/t/nexo-integration/95/62
 '----------------------------------------------------------------------------------
 ' Version History:
+'   2022-12-27  v0.2  Adjusted columns to latest format and added some asset conversions.
 '   2021-11-14  v0.1  First build
 '***********************************************************************************
 
@@ -27,6 +28,8 @@ Dim oAccointingSheet
 Dim oExchangeDoc
 Dim oExchangeSheet
 Dim sFileName ' Filename without extension
+Dim sInAsset
+Dim sAsset2
 
 ' Open LibreOffice and a desktop instance.
 Set oSM = WScript.CreateObject("com.sun.star.ServiceManager")
@@ -59,6 +62,8 @@ oSrcFolder = oFSO.GetFile(WScript.Arguments(0)).ParentFolder
 ' Read data from source file and process for output
 ' Data Structure:
 ' 0-Transaction, 1-Type, 2-Currency, 3-Amount, 4-USD Equivalent, 5-Details, 6-Outstanding Loan, 7-Date/Time
+
+' 0-Transaction, 1-Type, 2-Input Currency, 3-Input Amount, 4-Output Currency, 5-Output Amount, 6-USD Equivalent, 7-Details, 8-Outstanding Loan, 9-Date / Time
 '----------------------------------------------------------------------------------
 rowcountSS1 = 0
 rowcountSS2 = 0
@@ -67,40 +72,32 @@ do until oSrcFile.AtEndOfStream
   NextLine = oSrcFile.ReadLine
   rowcountSS1 = rowcountSS1 + 1
   aColumnText = split(NextLine, ",")
-  sValue = ""
+  'sValue = ""
 
-  ' Ignore the source file header line.
+  ' Column counts start at zero. Ignore the source file header line.
   if aColumnText(0) = "Transaction" then
     rowcountSS1 = 0
   else
     ' Write transaction data to the workbook.
-    newdate = dateadd("h", -2, cdate(aColumnText(7)))  'Makes all transactions UTC
+    newdate = dateadd("h", -2, cdate(aColumnText(8)))  'Makes all transactions UTC
     oAccointingSheet.getCellByPosition(1, rowcountSS1).String = newdate  'date
     
     ' Convert to a recognized asset.
-    select case aColumnText(2)
-      case "BNBN","NEXOBNB"
-        sValue = "BNB"
-      case "NEXOBEP2","NEXONEXO"
-        sValue = "NEXO"
-      case "USDTERC"
-        sValue = "USDT"
-      case else
-        sValue = aColumnText(2)
-    end select  
-  
+    sInAsset = ConvertAsset(aColumnText(2))
+    sOutAsset = ConvertAsset(aColumnText(4))
+
     select case aColumnText(1)
       case "Deposit","DepositToExchange"
         oAccointingSheet.getCellByPosition(0, rowcountSS1).String = "deposit"       'transactionType
-        oAccointingSheet.getCellByPosition(3, rowcountSS1).String = sValue          'inBuyAsset
+        oAccointingSheet.getCellByPosition(3, rowcountSS1).String = sInAsset        'inBuyAsset
         oAccointingSheet.getCellByPosition(2, rowcountSS1).Value = aColumnText(3)   'inBuyAmount
         oAccointingSheet.getCellByPosition(9, rowcountSS1).String = aColumnText(0)  'operationId
       
       case "Interest","Dividend","FixedTermInterest"
         if aColumnText(2) <> "USD" then
           oAccointingSheet.getCellByPosition(0, rowcountSS1).String = "deposit"       'transactionType
-          oAccointingSheet.getCellByPosition(8, rowcountSS1).String =  "income"       'lassification
-          oAccointingSheet.getCellByPosition(3, rowcountSS1).String = sValue          'inBuyAsset
+          oAccointingSheet.getCellByPosition(8, rowcountSS1).String = "income"        'classification
+          oAccointingSheet.getCellByPosition(3, rowcountSS1).String = sInAsset        'inBuyAsset
           oAccointingSheet.getCellByPosition(2, rowcountSS1).Value = aColumnText(3)   'inBuyAmount
           oAccointingSheet.getCellByPosition(9, rowcountSS1).String = aColumnText(0)  'operationId
         else
@@ -110,25 +107,26 @@ do until oSrcFile.AtEndOfStream
         
       case "Withdrawal"
         oAccointingSheet.getCellByPosition(0, rowcountSS1).String = "withdraw"      'transactionType
-        oAccointingSheet.getCellByPosition(4, rowcountSS1).Value = right(aColumnText(3), len(aColumnText(3)) - 1)  'outSellAmount
-        oAccointingSheet.getCellByPosition(5, rowcountSS1).String = sValue          'outSellAsset
+        oAccointingSheet.getCellByPosition(5, rowcountSS1).String = sOutAsset       'outSellAsset
+        oAccointingSheet.getCellByPosition(4, rowcountSS1).Value = aColumnText(5)   'outSellAmount
         oAccointingSheet.getCellByPosition(9, rowcountSS1).String = aColumnText(0)  'operationId
         
-      case "TransferIn","TransferOut","WithdrawalCredit","Repayment","InterestAdditional","LockingTermDeposit","UnlockingTermDeposit"
+      case "TransferIn","TransferOut","WithdrawalCredit","Repayment","InterestAdditional","Administrator","LockingTermDeposit","UnlockingTermDeposit"
         rowcountSS1 = rowcountSS1 - 1
-        
+      
+      ' Reverse the transactions for Nexo.
       case "Exchange"
         if iDoAll = 6 then
           if rowcountSS2 = 0 then
             rowcountSS2 = rowcountSS2 + 1
           end if
-          oExchangeSheet.getCellByPosition(0, rowcountSS2).String = "order"              'transactionType
-          oExchangeSheet.getCellByPosition(1, rowcountSS2).String = newdate              'date
-          oExchangeSheet.getCellByPosition(2, rowcountSS2).Value = ExchangeAmount(aColumnText(3), 1)  'inBuyAmount
-          oExchangeSheet.getCellByPosition(3, rowcountSS2).String = ExchangePair(aColumnText(2), 1)   'inBuyAsset
-          oExchangeSheet.getCellByPosition(4, rowcountSS2).Value = ExchangeAmount(aColumnText(3), 0)  'outSellAmount
-          oExchangeSheet.getCellByPosition(5, rowcountSS2).String = ExchangePair(aColumnText(2), 0)   'outSellAsset
-          oExchangeSheet.getCellByPosition(9, rowcountSS2).String = aColumnText(0)       'operationId
+          oExchangeSheet.getCellByPosition(0, rowcountSS2).String = "order"         'transactionType
+          oExchangeSheet.getCellByPosition(1, rowcountSS2).String = newdate         'date
+          oExchangeSheet.getCellByPosition(3, rowcountSS2).String = sOutAsset       'inBuyAsset
+          oExchangeSheet.getCellByPosition(2, rowcountSS2).Value = aColumnText(5)   'inBuyAmount
+          oExchangeSheet.getCellByPosition(5, rowcountSS2).String = sInAsset        'outSellAsset
+          oExchangeSheet.getCellByPosition(4, rowcountSS2).Value = aColumnText(3)   'outSellAmount
+          oExchangeSheet.getCellByPosition(9, rowcountSS2).String = aColumnText(0)  'operationId
           rowcountSS2 = rowcountSS2 + 1
         end if
         rowcountSS1 = rowcountSS1 - 1
@@ -140,20 +138,35 @@ do until oSrcFile.AtEndOfStream
           end if
           oExchangeSheet.getCellByPosition(0, rowcountSS2).String = "order"         'transactionType
           oExchangeSheet.getCellByPosition(1, rowcountSS2).String = newdate         'date
-          oExchangeSheet.getCellByPosition(2, rowcountSS2).Value = aColumnText(3)   'inBuyAmount
           oExchangeSheet.getCellByPosition(3, rowcountSS2).String = "USD"           'inBuyAsset
-          oExchangeSheet.getCellByPosition(4, rowcountSS2).Value = aColumnText(3)   'outSellAmount
+          oExchangeSheet.getCellByPosition(2, rowcountSS2).Value = aColumnText(3)   'inBuyAmount
           oExchangeSheet.getCellByPosition(5, rowcountSS2).String = "USDX"          'outSellAsset
+          oExchangeSheet.getCellByPosition(4, rowcountSS2).Value = aColumnText(5)   'outSellAmount
           oExchangeSheet.getCellByPosition(9, rowcountSS2).String = aColumnText(0)  'operationId
           rowcountSS2 = rowcountSS2 + 1
         end if
         rowcountSS1 = rowcountSS1 - 1
-        
+
+      case "Exchange Cashback"
+        if iDoAll = 6 then
+          if rowcountSS2 = 0 then
+            rowcountSS2 = rowcountSS2 + 1
+          end if
+          oExchangeSheet.getCellByPosition(0, rowcountSS2).String = "deposit"       'transactionType
+          oExchangeSheet.getCellByPosition(8, rowcountSS2).String = "bounty"        'classification
+          oExchangeSheet.getCellByPosition(1, rowcountSS2).String = newdate         'date
+          oExchangeSheet.getCellByPosition(3, rowcountSS2).String = sInAsset        'inBuyAsset
+          oExchangeSheet.getCellByPosition(2, rowcountSS2).Value = aColumnText(3)   'inBuyAmount
+          oExchangeSheet.getCellByPosition(9, rowcountSS2).String = aColumnText(0)  'operationId
+          rowcountSS2 = rowcountSS2 + 1
+        end if
+        rowcountSS1 = rowcountSS1 - 1
+
       case "Liquidation"
         oAccointingSheet.getCellByPosition(0, rowcountSS1).String = "withdraw"      'transactionType
-        oAccointingSheet.getCellByPosition(4, rowcountSS1).Value = right(aColumnText(3), len(aColumnText(3)) - 1)  'outSellAmount
-        oAccointingSheet.getCellByPosition(5, rowcountSS1).String = sValue          'outSellAsset
         oAccointingSheet.getCellByPosition(8, rowcountSS1).String = "payment"       'classification
+        oAccointingSheet.getCellByPosition(5, rowcountSS1).String = sOutAsset       'outSellAsset
+        oAccointingSheet.getCellByPosition(4, rowcountSS1).Value = aColumnText(5)   'outSellAmount
         oAccointingSheet.getCellByPosition(9, rowcountSS1).String = aColumnText(0)  'operationId
     end select
   end if
@@ -241,7 +254,25 @@ Sub MakeHeaders(oSheet)
   oSheet.getCellByPosition(7, 0).String = "feeAsset (optional)"
   oSheet.getCellByPosition(8, 0).String = "classification (optional)"
   oSheet.getCellByPosition(9, 0).String = "operationId (optional)"
+  oSheet.getCellByPosition(10, 0).String = "comments (optional)"
 End Sub
+
+Function ConvertAsset(sAsset)
+  select case sAsset
+    case "BNBN","NEXOBNB"
+      ConvertAsset = "BNB"
+    case "NEXOBEP2","NEXONEXO"
+      ConvertAsset = "NEXO"
+    case "USDTERC"
+      ConvertAsset = "USDT"
+    case "UST"
+      ConvertAsset = "USTC"
+    case "LUNA2"
+      ConvertAsset = "LUNA"
+    case else
+      ConvertAsset = sAsset
+  end select
+End Function
 
 Function ExchangePair(dump, pair_value)
   dumptext = split(dump, "/")
@@ -259,7 +290,7 @@ Function ExchangePair(dump, pair_value)
 End Function
 
 Function ExchangeAmount(dump, amt_value)
-  dumptext = split(dump, "/")
+  dumptext = split(dump, " ")
   tradeamt = dumptext(amt_value)
   ExchangeAmount = tradeamt
 End Function
